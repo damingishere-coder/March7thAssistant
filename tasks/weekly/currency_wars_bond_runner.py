@@ -64,11 +64,17 @@ class BondCampaign:
         if auto.find_element(("羁绊链路", "羁绊图鉴"), "text", crop=(0, 0, .22, .13)):
             self.return_home()
         screen.change_to("currency_wars_homepage")
-        if not auto.click_element("羁绊链路", "text", include=True, max_retries=3):
-            raise RuntimeError("未找到“羁绊链路”入口，请先确认活动页面可用")
-        time.sleep(1)
-        if not (auto.find_element("流派羁绊", "text") and auto.find_element("阵营羁绊", "text")):
-            raise RuntimeError("未确认进入羁绊链路，停止自动运行")
+        for _ in range(3):
+            if not auto.click_element("羁绊链路", "text", include=True, max_retries=3, press_duration=.10):
+                raise RuntimeError("未找到“羁绊链路”入口，请先确认活动页面可用")
+            for _ in range(6):
+                time.sleep(.5)
+                if auto.find_element("流派羁绊", "text") and auto.find_element("阵营羁绊", "text"):
+                    return
+            # 点击成功只表示输入已发送。仍在首页才重新定位入口再试，不能在未知页面盲点。
+            if not screen.check_screen("currency_wars_homepage"):
+                break
+        raise RuntimeError("未确认进入羁绊链路，停止自动运行")
 
     @staticmethod
     def return_home():

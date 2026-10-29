@@ -109,3 +109,14 @@ def test_matching_bond_does_not_override_reset_board_blacklist(tmp_path):
     runner.target = BondTarget('style', '追击', 7)
     runner.members = {'飞霄'}
     assert runner.choose_text_option([['大裁员', '追击'], ['追击邀请'], ['普通选项']]) == 1
+
+
+def test_missed_entry_click_retries_only_after_homepage_is_confirmed(tmp_path):
+    module, _, _, runner = campaign(tmp_path)
+    module.auto.find_element.side_effect = [False] + [False] * 6 + [True, True]
+    module.screen.check_screen.return_value = True
+    with patch.object(module.time, 'sleep'):
+        runner.open_rewards()
+    assert module.auto.click_element.call_count == 2
+    assert module.auto.click_element.call_args.kwargs['press_duration'] == .10
+    module.screen.check_screen.assert_called_once_with('currency_wars_homepage')
