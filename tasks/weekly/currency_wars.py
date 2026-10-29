@@ -23,6 +23,7 @@ class CurrencyWarsCharacter:
 
 class CurrencyWars:
     def __init__(self):
+        self.bond_campaign = None  # 仅羁绊链路模式启用；普通策略保持原流程。
         self._last_battle_keepalive: Optional[float] = None
         self.screenshot = None  # 任务截图
         self.peipei_count: int = 0  # 佩佩和叽米
@@ -235,6 +236,9 @@ class CurrencyWars:
         return None
 
     def start(self) -> bool:
+        if cfg.get_value("currencywars_strategy", "default") == "bond_chain":
+            from tasks.weekly.currency_wars_bond_runner import BondCampaign
+            return BondCampaign(self).run()
         log.hr('准备货币战争', '0')
         success = self.run()
         if success:
@@ -377,7 +381,11 @@ class CurrencyWars:
         log.info("开始「货币战争」")
         screen.change_to("currency_wars_mode_select")
 
+        if self.bond_campaign is not None and auto.find_element("结束并结算", "text", crop=(1253 / 1920, 915 / 1080, 271 / 1920, 95 / 1080)):
+            raise RuntimeError("检测到未结算对局，羁绊模式保留现场；请先完成或结算原对局")
         if auto.click_element("结束并结算", "text", crop=(1253 / 1920, 915 / 1080, 271 / 1920, 95 / 1080)):
+            if self.bond_campaign is not None:
+                raise RuntimeError("检测到未结算对局，羁绊模式保留现场；请先完成或结算原对局")
             log.warning("检测到未结算的对局，放弃并结算中")
             if auto.click_element("放弃并结算", "text", max_retries=10, crop=(761 / 1920, 697 / 1080, 399 / 1920, 90 / 1080)):
                 self.loop()
@@ -426,6 +434,11 @@ class CurrencyWars:
         """
         选择关卡难度
         """
+        if self.bond_campaign is not None:
+            return self.bond_campaign.choose_level()
+        if cfg.currencywars_rank_difficulty == "purple1":
+            from tasks.weekly.currency_wars_bond_runner import BondCampaign
+            return BondCampaign(self).choose_level()
         log.info("选择关卡")
         # 避免低性能设备加载过慢
         time.sleep(6)  # 等待界面加载
@@ -509,6 +522,9 @@ class CurrencyWars:
                 auto.take_screenshot()
                 auto.screenshot.save(debug_path)
                 log.error(f"已保存调试截图至 {debug_path}，请将该截图和日志发送给开发者以便排查问题")
+
+                if self.bond_campaign is not None:
+                    raise RuntimeError("羁绊对局识别异常，已保留现场与进度，请检查后继续") from e
 
                 self.give_up_and_settle()
 
@@ -647,6 +663,9 @@ class CurrencyWars:
                     if not had_seele and self.has_seele:
                         log.info("首次获得希儿，立即出售多余角色")
                         self.sell_characters_seele_strategy()
+
+                if self.bond_campaign is not None:
+                    self.bond_campaign.prepare_board()
 
                 skip_buy_experience = False
                 if cfg.currencywars_strategy == "aglaea" and not self.allow_buy_experience:
@@ -1383,6 +1402,9 @@ class CurrencyWars:
         """
         出售多余角色
         """
+        if self.bond_campaign is not None:
+            self.bond_campaign.sell_surplus()
+            return
         log.info("出售多余角色")
         any_sold = False
 
@@ -1604,7 +1626,12 @@ class CurrencyWars:
                 f"计算区域结果: {self.zone_name_localization['forward']}={len(assigned['forward'])}, {self.zone_name_localization['backward']}={len(assigned['backward'])}, {self.zone_name_localization['prepare']}={len(assigned['prepare'])}, total used={used}/{limit}")
             return ordered_chars, assigned, used
 
-        all_chars, assigned, used = _build_assignment()
+        if self.bond_campaign is not None:
+            from tasks.weekly.currency_wars_bonds import plan_deployment
+            all_chars, assigned, used = plan_deployment(
+                source_chars, forward_slots, backward_slots, limit, self.bond_campaign.members)
+        else:
+            all_chars, assigned, used = _build_assignment()
 
         if cfg.currencywars_strategy == "aglaea":
             deployed_names = {
@@ -2144,6 +2171,8 @@ class CurrencyWars:
         """
         购买经验
         """
+        if self.bond_campaign is not None and self.current_level >= self.bond_campaign.population_target:
+            return
         if cfg.currencywars_strategy == "aglaea" and self.current_level == 9:
             log.info("当前等级9，策略为阿格莱雅，跳过购买经验")
             return
@@ -2164,6 +2193,9 @@ class CurrencyWars:
         while True:
             if self.get_level():
                 log.debug(f"缓存角色等级信息: 当前等级 {self.current_level}")
+
+            if self.bond_campaign is not None and self.current_level >= self.bond_campaign.population_target:
+                break
 
             if cfg.currencywars_strategy == "aglaea" and self.current_level == 9:
                 log.info("当前等级9，策略为阿格莱雅，跳过购买经验")
@@ -2312,7 +2344,10 @@ class CurrencyWars:
         if not auto.find_element("聘用书", "text", None, crop=(923.0 / 1920, 21.0 / 1080, 168.0 / 1920, 74.0 / 1080), include=True):
             return False
         log.info("检测到聘用书选项，尝试点击")
-        if cfg.currencywars_strategy == "aglaea":
+        if self.bond_campaign is not None:
+            if not auto.click_element(tuple(sorted(self.bond_campaign.members)), "text", crop=(501 / 1920, 362 / 1080, 1047 / 1920, 42 / 1080)):
+                auto.click_element((486 / 1920, 159 / 1080, 240 / 1920, 269 / 1080), "crop")
+        elif cfg.currencywars_strategy == "aglaea":
             remembrance_trailblazer_name = self.get_remembrance_trailblazer_name()
             preferred_characters = ["瓦尔特", "昔涟"]
             if remembrance_trailblazer_name:
@@ -2350,7 +2385,10 @@ class CurrencyWars:
         if not auto.find_element("专家邀请函", "text", None, crop=(949 / 1920, 27 / 1080, 153 / 1920, 56 / 1080), include=True):
             return False
         log.info("检测到专家邀请函选项，尝试点击")
-        if cfg.currencywars_strategy == "aglaea" and auto.click_element("银狼", "text", crop=(366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
+        if self.bond_campaign is not None:
+            if not auto.click_element(tuple(sorted(self.bond_campaign.members)), "text", crop=(366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
+                auto.click_element((769 / 1920, 134 / 1080, 245 / 1920, 276 / 1080), "crop")
+        elif cfg.currencywars_strategy == "aglaea" and auto.click_element("银狼", "text", crop=(366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
             pass
         elif cfg.currencywars_strategy == "seele":
             # 希儿策略：如果没有希儿或希儿没三星，优先希儿；其次按费用从高到低（仅限尚未拥有的角色）
@@ -2736,6 +2774,12 @@ class CurrencyWars:
             option_texts = [self._get_ocr_texts_in_crop(pos) for pos in button_positions]
             has_choose = False
 
+            if self.bond_campaign is not None:
+                index = self.bond_campaign.choose_text_option(option_texts)
+                if index is not None:
+                    auto.click_element(button_positions_click[index], 'crop')
+                    has_choose = True
+
             # 投资环境：
             # 昼之半神概念股：开局时获得【昼之半神】角色和初始简易装备，【昼之半神】角色的刷新概率提高。
             # 能量概念股：开局时获得【能量】角色和初始简易装备，【能量】角色的刷新概率提高。
@@ -2871,7 +2915,12 @@ class CurrencyWars:
                 (1362.0 / 1920, 346.0 / 1080, 130.0 / 1920, 247.0 / 1080),
             ]
             has_choose = False
-            if cfg.currencywars_strategy == "aglaea":
+            if self.bond_campaign is not None:
+                index = self.bond_campaign.choose_option(button_positions)
+                if index is not None:
+                    auto.click_element(button_positions_click[index], 'crop')
+                    has_choose = True
+            elif cfg.currencywars_strategy == "aglaea":
                 remembrance_trailblazer_name = self.get_remembrance_trailblazer_name()
                 preferred_characters = ["瓦尔特", "昔涟"]
                 if remembrance_trailblazer_name:

@@ -598,15 +598,21 @@ class SettingInterface(ScrollArea):
             UiIcon.GAUGE,
             tr('职级难度'),
             '',
-            texts={tr('最高职级'): 'highest', tr('当前职级'): 'current', tr('最低职级'): 'lowest'}
+            texts={tr('最高职级'): 'highest', tr('当前职级'): 'current', tr('最低职级'): 'lowest', tr('紫金1（羁绊链路）'): 'purple1'}
         )
         self.currencywarsStrategyCard = ExpandableComboBoxSettingCard(
             "currencywars_strategy",
             UiIcon.LIST,
             tr('货币战争策略'),
             tr('提升晋升等级，推荐在最低职级选择默认策略。提升职级等级，推荐在最高职级选择阿格莱雅或希儿策略。'),
-            {tr('默认'): 'default', tr('阿格莱雅'): 'aglaea', tr('希儿') + tr('【测试版】'): 'seele'}
+            {tr('默认'): 'default', tr('阿格莱雅'): 'aglaea', tr('希儿') + tr('【测试版】'): 'seele',
+             tr('羁绊链路补全（流派→阵营）'): 'bond_chain'}
         )
+        self.currencywarsBondProgressCard = PushSettingCard(
+            tr('查看进度 / 继续'), FIF.PLAY,
+            tr('羁绊链路进度'),
+            tr('固定标准博弈紫金1；每局一个羁绊，核对领奖后轮换，连续失败3局暂停。'))
+        self.currencywarsBondProgressCard.clicked.connect(self.__showBondProgress)
         self.currencywarsRemembranceTrailblazerNameCard = PushSettingCardStr(
             tr('修改'),
             FIF.EDIT,
@@ -2723,6 +2729,7 @@ class SettingInterface(ScrollArea):
         self.CurrencywarsGroup.addSettingCard(self.currencywarsBonusEnableCard)
         self.CurrencywarsGroup.addSettingCard(self.currencywarsRankDifficultyCard)
         self.CurrencywarsGroup.addSettingCard(self.currencywarsStrategyCard)
+        self.CurrencywarsGroup.addSettingCard(self.currencywarsBondProgressCard)
         self.currencywarsStrategyCard.addSettingCards([
             self.currencywarsRemembranceTrailblazerNameCard,
             self.currencywarsStrategyRestartOnSpecialTagsCard,
@@ -3440,6 +3447,28 @@ class SettingInterface(ScrollArea):
             duration=2000,
             parent=self
         )
+
+    def __showBondProgress(self):
+        from tasks.weekly.currency_wars_bonds import BondProgress, campaign_lock
+        try:
+            progress = BondProgress()
+            data = progress.data
+            description = tr('当前目标：{target}\n连续未达标：{count}/3\n已领取：{received}/{total}').format(
+                target=data['target'].split(':', 1)[-1] if data['target'] else tr('尚未扫描'), count=data['failures'],
+                received=data.get('received', '?'), total=data.get('total', '?'))
+            if data['in_flight']:
+                description += '\n' + tr('上次对局结果未确认。请先停止任务并完成或结算游戏内对局，再继续。')
+            description += '\n\n' + tr('继续会保留当前目标并清零连续失败次数；实际完成状态仍以游戏奖励页面为准。')
+            dialog = MessageBox(tr('羁绊链路进度'), description, self.window())
+            dialog.yesButton.setText(tr('继续当前羁绊'))
+            dialog.cancelButton.setText(tr('关闭'))
+            if dialog.exec():
+                with campaign_lock(progress.path):
+                    progress = BondProgress(progress.path)
+                    progress.data.update(failures=0, paused=False, in_flight=False)
+                    progress.save()
+        except (OSError, RuntimeError) as error:
+            InfoBar.error(tr('羁绊进度读取失败'), str(error), parent=self, duration=8000)
 
     def __applyCurrencywarsRankPreset(self):
         self.__setComboBoxCardValue(self.currencywarsTypeCard, 'normal')

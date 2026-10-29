@@ -227,6 +227,9 @@ def run_sub_task(action):
 
     def currencywars(mode=None):
         war = CurrencyWars()
+        if cfg.get_value("currencywars_strategy", "default") == "bond_chain":
+            # 本策略自身管理循环及失败上限，不能再套无限循环或中途接管。
+            return war.start()
         if mode == "loop":
             _run_loop_task_with_telemetry("currencywarsloop", war.start)
         elif mode == "temp":
