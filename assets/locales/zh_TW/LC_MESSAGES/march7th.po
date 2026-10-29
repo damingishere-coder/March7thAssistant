@@ -6241,3 +6241,50 @@ msgstr "HoYoPlay"
 #: app/setting_interface.py:3349
 msgid "选择启动器路径"
 msgstr "選擇啟動器路徑"
+
+#: app/setting_interface.py:601
+msgid "紫金1（羁绊链路）"
+msgstr ""
+
+#: app/setting_interface.py:609
+msgid "羁绊链路补全（流派→阵营）"
+msgstr ""
+
+#: app/setting_interface.py:612
+msgid "查看进度 / 继续"
+msgstr ""
+
+#: app/setting_interface.py:613
+msgid "羁绊链路进度"
+msgstr ""
+
+#: app/setting_interface.py:614
+msgid "固定标准博弈紫金1；每局一个羁绊，核对领奖后轮换，连续失败3局暂停。"
+msgstr ""
+
+#: app/setting_interface.py:3456
+msgid ""
+"当前目标：{target}\n"
+"连续未达标：{count}/3\n"
+"已领取：{received}/{total}"
+msgstr ""
+
+#: app/setting_interface.py:3457
+msgid "尚未扫描"
+msgstr ""
+
+#: app/setting_interface.py:3460
+msgid "上次对局结果未确认。请先停止任务并完成或结算游戏内对局，再继续。"
+msgstr ""
+
+#: app/setting_interface.py:3461
+msgid "继续会保留当前目标并清零连续失败次数；实际完成状态仍以游戏奖励页面为准。"
+msgstr ""
+
+#: app/setting_interface.py:3463
+msgid "继续当前羁绊"
+msgstr ""
+
+#: app/setting_interface.py:3471
+msgid "羁绊进度读取失败"
+msgstr ""
