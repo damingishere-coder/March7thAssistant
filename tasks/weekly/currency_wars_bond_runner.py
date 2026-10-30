@@ -93,6 +93,16 @@ class BondCampaign:
         auto.mouse_scroll(30, direction=direction, pause=False)
         time.sleep(.7)
 
+    def close_reward_preview(self, label):
+        # 未达成的奖励不一定弹出物品详情；Esc 会把整个羁绊页面关闭。
+        # 点击卡片上方的空白处关闭详情，没有弹窗时也不会离开奖励页。
+        self.click(.50, .22)
+        for _ in range(6):
+            if auto.find_element(label, "text"):
+                return
+            time.sleep(.3)
+        raise RuntimeError("领取奖励后未确认返回羁绊页面，暂停并保留进度")
+
     def scan_rewards(self, claim=True):
         from module.ocr import ocr
         import numpy as np
@@ -134,10 +144,7 @@ class BondCampaign:
                             continue
                         self.click(*current_positions[row.key])
                         time.sleep(.5)
-                        auto.press_key("esc")
-                        time.sleep(.3)
-                        if not auto.find_element(label, "text"):
-                            raise RuntimeError("领取奖励后未确认返回羁绊页面，暂停并保留进度")
+                        self.close_reward_preview(label)
                     image, result = self.capture()
                     received, total = parse_progress(self.texts(result))
                     rows, positions = parse(image, result, category)
