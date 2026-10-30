@@ -204,6 +204,34 @@ def test_resume_entry_timeout_preserves_unknown_run(tmp_path):
     war.start_war.assert_not_called()
 
 
+@pytest.mark.parametrize('map_visible,exit_visible', [(True, True), (True, False), (False, False)])
+def test_resume_handles_map_prompt_once_and_never_confirms_unknown_entry(tmp_path, map_visible, exit_visible):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module)
+    entry = runner.capture.return_value
+    labels = ['点击空白处继续', '位面1'] if map_visible else ['点击空白处继续', '未知页面']
+    prompt = (entry[0], [([], (text, .99)) for text in labels])
+    runner.capture.side_effect = [entry] + [prompt] * 20
+    module.auto.find_element.side_effect = [False] + ([True] if exit_visible else [False] * 19)
+    runner.click = Mock()
+    runner.finish_run = Mock(return_value=True)
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'):
+        if exit_visible:
+            assert runner.resume_interrupted_run(partial) is True
+            war.loop.assert_called_once()
+            runner.finish_run.assert_called_once()
+        else:
+            with pytest.raises(RuntimeError, match='未确认进入原局'):
+                runner.resume_interrupted_run(partial)
+            war.loop.assert_not_called()
+            runner.finish_run.assert_not_called()
+    assert runner.click.call_count == int(map_visible)
+    assert runner.progress.data['in_flight'] is True
+    assert runner.progress.data['failures'] == 2
+    assert runner.progress.data['history'] == []
+    war.start_war.assert_not_called()
+
+
 def test_purple_one_is_verified_without_touching_rank_arrows(tmp_path):
     module, _, war, runner = campaign(tmp_path)
     runner.read_rank = Mock(return_value=('A5紫金', 1))
