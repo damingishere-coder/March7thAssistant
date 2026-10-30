@@ -244,3 +244,24 @@ def test_missed_entry_click_retries_only_after_homepage_is_confirmed(tmp_path):
     assert module.auto.click_element.call_count == 2
     assert module.auto.click_element.call_args.kwargs['press_duration'] == .10
     module.screen.check_screen.assert_called_once_with('currency_wars_homepage')
+
+
+def test_reward_without_popup_is_not_dismissed_with_escape(tmp_path):
+    module, _, _, runner = campaign(tmp_path)
+    runner.click = Mock()
+    module.auto.find_element.side_effect = [False, True]
+    with patch.object(module.time, 'sleep'):
+        runner.close_reward_preview('流派羁绊')
+    runner.click.assert_called_once_with(.50, .22)
+    module.auto.press_key.assert_not_called()
+
+
+def test_unconfirmed_reward_page_stops_without_escape_or_navigation(tmp_path):
+    module, _, _, runner = campaign(tmp_path)
+    module.auto.find_element.return_value = False
+    runner.click = Mock()
+    with patch.object(module.time, 'sleep'), pytest.raises(RuntimeError, match='未确认返回羁绊页面'):
+        runner.close_reward_preview('流派羁绊')
+    assert module.auto.find_element.call_count == 6
+    module.auto.press_key.assert_not_called()
+    module.screen.change_to.assert_not_called()
