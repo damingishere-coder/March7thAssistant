@@ -8,7 +8,7 @@ from module.config import cfg
 from module.logger import log
 from module.screen import screen
 from tasks.weekly.currency_wars_bonds import (
-    BondProgress, STRATEGY, campaign_lock, compact, parse_progress, parse_reward_page,
+    BondProgress, BondTarget, STRATEGY, campaign_lock, compact, parse_progress, parse_reward_page,
 )
 
 
@@ -400,13 +400,33 @@ class BondCampaign:
         with campaign_lock(self.progress.path):
             return self._run()
 
+    def reconcile_completed_run(self):
+        """仅凭完整领奖证据恢复中断记录，不能接管或放弃尚在进行的对局。"""
+        if not screen.check_screen("currency_wars_homepage"):
+            if auto.find_element(("羁绊链路", "羁绊图鉴"), "text", crop=(0, 0, .22, .13)):
+                self.return_home()
+            elif screen.check_screen("main"):
+                screen.change_to("currency_wars_homepage")
+            else:
+                raise RuntimeError("上次羁绊对局中断；请完成结算并返回货币战争首页后重试，保留原局与进度")
+        rewards, received, total = self.scan_rewards()
+        key = self.progress.data["target"]
+        rows = [row for row in rewards if f"{row.category}:{row.name}" == key]
+        # 紫金档领奖要求成功通关；全部档位的领取标记与总金额均已由扫描独立复核。
+        if not rows or not all(row.claimed for row in rows) or not any(row.purple for row in rows):
+            raise RuntimeError("上次目标奖励尚未全部确认领取，保留中断记录，停止自动重开")
+        target = BondTarget(rows[0].category, rows[0].name, max(row.count for row in rows))
+        self.progress.finish(target, True, True)
+        self.progress.observe(rewards, received, total)
+        log.info(f"已复核中断目标{target.name}全部奖励领取，恢复羁绊任务：{received}/{total}")
+
     def _run(self):
         from tasks.base.base import Base
         from module.notification.notification import NotificationLevel
         if self.progress.data["paused"]:
             raise RuntimeError("当前羁绊连续失败3局，已暂停；点击设置中的“继续当前羁绊”后重试")
         if self.progress.data["in_flight"]:
-            raise RuntimeError("上次羁绊对局中断，结果未确认；请先完成或结算该局，再点击“继续当前羁绊”")
+            self.reconcile_completed_run()
         while True:
             rewards, received, total = self.scan_rewards()
             self.all_rewards = rewards

@@ -74,9 +74,39 @@ def test_interrupted_game_is_not_abandoned_on_resume(tmp_path):
     module, stubs, war, runner = campaign(tmp_path)
     runner.progress.data['in_flight'] = True
     runner.scan_rewards = Mock()
+    module.screen.check_screen.return_value = False
+    module.auto.find_element.return_value = None
     with patch.dict(sys.modules, stubs), pytest.raises(RuntimeError, match='上次羁绊对局中断'):
         runner.run()
     runner.scan_rewards.assert_not_called()
+    war.start_war.assert_not_called()
+
+
+def test_completed_interrupted_target_reconciles_before_next_game(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    runner.progress.data.update(in_flight=True, target='style:追击', failures=1)
+    module.screen.check_screen.return_value = True
+    rows = [BondReward('style', '追击', 7, True, True)]
+    runner.scan_rewards = Mock(return_value=(rows, 20, 20))
+    with patch.dict(sys.modules, stubs):
+        assert runner.run() is True
+    assert runner.progress.data['in_flight'] is False
+    assert runner.progress.data['failures'] == 0
+    assert runner.progress.data['history'][-1]['verified'] is True
+    war.start_war.assert_not_called()
+
+
+def test_partial_reward_evidence_does_not_clear_interrupted_run(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    runner.progress.data.update(in_flight=True, target='style:追击', failures=1)
+    module.screen.check_screen.return_value = True
+    runner.scan_rewards = Mock(return_value=([
+        BondReward('style', '追击', 5, False, True),
+        BondReward('style', '追击', 7, True, False)], 20, 40))
+    with patch.dict(sys.modules, stubs), pytest.raises(RuntimeError, match='尚未全部确认'):
+        runner.run()
+    assert runner.progress.data['in_flight'] is True
+    assert runner.progress.data['failures'] == 1
     war.start_war.assert_not_called()
 
 
