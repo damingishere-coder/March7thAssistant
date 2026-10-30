@@ -401,12 +401,14 @@ class BondCampaign:
             return self._run()
 
     def reconcile_completed_run(self):
-        """仅凭完整领奖证据恢复中断记录，不能接管或放弃尚在进行的对局。"""
+        """先复核实际奖励；未完成时仅接续有保存名单且可核验的紫金1旧局。"""
         if not screen.check_screen("currency_wars_homepage"):
             if auto.find_element(("羁绊链路", "羁绊图鉴"), "text", crop=(0, 0, .22, .13)):
                 self.return_home()
             elif screen.check_screen("main"):
                 screen.change_to("currency_wars_homepage")
+            elif screen.check_screen("currency_wars_mode_select"):
+                self.return_home()
             else:
                 raise RuntimeError("上次羁绊对局中断；请完成结算并返回货币战争首页后重试，保留原局与进度")
         rewards, received, total = self.scan_rewards()
@@ -414,11 +416,73 @@ class BondCampaign:
         rows = [row for row in rewards if f"{row.category}:{row.name}" == key]
         # 紫金档领奖要求成功通关；全部档位的领取标记与总金额均已由扫描独立复核。
         if not rows or not all(row.claimed for row in rows) or not any(row.purple for row in rows):
-            raise RuntimeError("上次目标奖励尚未全部确认领取，保留中断记录，停止自动重开")
+            return self.resume_interrupted_run(rewards)
         target = BondTarget(rows[0].category, rows[0].name, max(row.count for row in rows))
         self.progress.finish(target, True, True)
         self.progress.observe(rewards, received, total)
         log.info(f"已复核中断目标{target.name}全部奖励领取，恢复羁绊任务：{received}/{total}")
+        return True
+
+    def resume_interrupted_run(self, rewards):
+        """核对保存的目标名单与游戏中的紫金1旧局，接续时不重置或计败。"""
+        key = self.progress.data["target"]
+        rows = [row for row in rewards if f"{row.category}:{row.name}" == key]
+        saved_members = self.progress.data.get("members", [])
+        if (not rows or not isinstance(saved_members, list)
+                or not all(isinstance(name, str) and name for name in saved_members)
+                or len(set(saved_members)) < max(row.count for row in rows)):
+            raise RuntimeError("上次目标奖励尚未全部确认领取，且缺少原局角色名单；保留中断记录，停止自动重开")
+        screen.change_to("currency_wars_mode_select")
+        if not auto.click_element("标准博弈", "text", crop=(.02, .10, .26, .50), press_duration=.10):
+            raise RuntimeError("未确认原局标准博弈入口，保留中断记录")
+        time.sleep(1)
+        image, result = self.capture()
+        texts = self.texts(result)
+        normal_selected = any(compact(text) == "标准博弈" for box, (text, confidence) in result
+                              if confidence >= .7 and box[0][0] >= image.width * .30
+                              and box[0][1] < image.height * .20)
+        footer = "".join(compact(text) for box, (text, confidence) in result
+                         if confidence >= .7 and box[0][0] >= image.width * .50
+                         and image.height * .76 < box[0][1] < image.height * .87)
+        stage = re.search(r"当前进度([1-3]-\d{1,2})(?!\d)", footer)
+        if (not normal_selected or "继续进度" not in texts or "结束并结算" not in texts
+                or not re.search(r"紫金1(?!\d)", footer) or stage is None):
+            raise RuntimeError("未确认可接续的标准博弈紫金1旧局，保留中断记录，不放弃或重开")
+        self.target = BondTarget(rows[0].category, rows[0].name, max(row.count for row in rows))
+        self.members = set(saved_members)
+        self.all_rewards = rewards
+        self.war.bond_campaign = self
+        cfg.set_values({"currencywars_type": "normal", "currencywars_rank_difficulty": "purple1",
+                        "currencywars_fast_mode": False})
+        log.info(f"已确认原局紫金1、进度{stage[1]}，接续{self.target.name}；保留阵容与连续失败次数")
+        if not auto.click_element("继续进度", "text", crop=(.77, .87, .22, .10), press_duration=.10):
+            raise RuntimeError("未能点击原局继续进度，保留中断记录")
+        for _ in range(20):
+            if auto.find_element("./assets/images/screen/currency_wars/exit.png", "image", .9,
+                                 crop=(3 / 1920, 37 / 1080, 104 / 1920, 57 / 1080)):
+                self.war.loop()
+                return self.finish_run()
+            time.sleep(2)
+        raise RuntimeError("接续后未确认进入原局，保留中断记录，不重复点击或重开")
+
+    def finish_run(self):
+        """新局和接续局共用结算，只有实际结果与领奖证据可更新计数。"""
+        from tasks.base.base import Base
+        from module.notification.notification import NotificationLevel
+        cleared = self.war.result
+        if cleared is None:
+            self.progress.finish(self.target, None, False)
+        after, new_received, new_total = self.scan_rewards()
+        target_rows = [row for row in after if row.name == self.target.name and row.category == self.target.category]
+        verified = bool(target_rows) and all(row.claimed for row in target_rows)
+        self.progress.finish(self.target, cleared, verified)
+        if self.progress.data["paused"]:
+            message = f"{self.target.name}连续3局未完成目标，羁绊任务已暂停"
+            log.warning(message)
+            Base.send_notification_with_screenshot(message, NotificationLevel.ERROR)
+            return False
+        log.info(f"羁绊进度：{new_received}/{new_total}；当前目标连续未达标{self.progress.data['failures']}局")
+        return True
 
     def _run(self):
         from tasks.base.base import Base
@@ -426,7 +490,8 @@ class BondCampaign:
         if self.progress.data["paused"]:
             raise RuntimeError("当前羁绊连续失败3局，已暂停；点击设置中的“继续当前羁绊”后重试")
         if self.progress.data["in_flight"]:
-            self.reconcile_completed_run()
+            if self.reconcile_completed_run() is False:
+                return False
         while True:
             rewards, received, total = self.scan_rewards()
             self.all_rewards = rewards
@@ -445,17 +510,5 @@ class BondCampaign:
             if not self.war.start_war("normal"):
                 raise RuntimeError("未确认开始羁绊对局，停止自动重开")
             self.war.loop()
-            cleared = self.war.result
-            if cleared is None:
-                self.progress.finish(self.target, None, False)
-            # 对局结果不能代替奖励证据，回到链路页重新核对当前目标所有档位。
-            after, new_received, new_total = self.scan_rewards()
-            target_rows = [row for row in after if row.name == self.target.name and row.category == self.target.category]
-            verified = bool(target_rows) and all(row.claimed for row in target_rows)
-            self.progress.finish(self.target, cleared, verified)
-            if self.progress.data["paused"]:
-                message = f"{self.target.name}连续3局未完成目标，羁绊任务已暂停"
-                log.warning(message)
-                Base.send_notification_with_screenshot(message, NotificationLevel.ERROR)
+            if not self.finish_run():
                 return False
-            log.info(f"羁绊进度：{new_received}/{new_total}；当前目标连续未达标{self.progress.data['failures']}局")
