@@ -110,6 +110,100 @@ def test_partial_reward_evidence_does_not_clear_interrupted_run(tmp_path):
     war.start_war.assert_not_called()
 
 
+def prepare_resume(runner, module, rank='紫金1', stage='1-7', selected='标准博弈'):
+    runner.progress.data.update(in_flight=True, target='style:能量', failures=2,
+                                members=['角色' + str(index) for index in range(7)])
+    module.screen.check_screen.return_value = True
+    module.auto.click_element.return_value = True
+    module.auto.find_element.return_value = True
+    def line(text, x, y):
+        return ([[x, y], [x + 100, y], [x + 100, y + 25], [x, y + 25]], (text, .99))
+    runner.capture = Mock(return_value=(SimpleNamespace(width=1920, height=1080), [
+        line(selected, 650, 150), line('对局难度' + rank, 1300, 870),
+        line('当前进度' + stage, 1550, 870), line('结束并结算', 1300, 975),
+        line('继续进度', 1580, 975)]))
+    return [BondReward('style', '能量', 7, True, False)]
+
+
+def test_resume_preserves_target_members_and_failures_until_verified_settlement(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module)
+    complete = [BondReward('style', '能量', 7, True, True)]
+    runner.scan_rewards = Mock(side_effect=[(partial, 0, 20), (complete, 20, 20), (complete, 20, 20)])
+    def check_live_state():
+        assert runner.target == BondTarget('style', '能量', 7)
+        assert runner.members == set(runner.progress.data['members'])
+        assert runner.progress.data['failures'] == 2
+        assert runner.progress.data['in_flight'] is True
+        assert runner.progress.data['history'] == []
+    war.loop.side_effect = check_live_state
+    war.result = True
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'):
+        assert runner.run() is True
+    war.start_war.assert_not_called()
+    war.loop.assert_called_once()
+    assert runner.progress.data['failures'] == 0
+    assert len(runner.progress.data['history']) == 1
+    assert runner.progress.data['history'][0]['verified'] is True
+
+
+@pytest.mark.parametrize('rank,stage,selected', [
+    ('紫金2', '1-7', '标准博弈'), ('紫金11', '1-7', '标准博弈'),
+    ('紫金1', '未知', '标准博弈'), ('紫金1', '1-7', '超频博弈')])
+def test_resume_rejects_unverified_old_run_without_reset_or_abandon(tmp_path, rank, stage, selected):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module, rank, stage, selected)
+    runner.scan_rewards = Mock(return_value=(partial, 0, 20))
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'), pytest.raises(RuntimeError, match='未确认可接续'):
+        runner.run()
+    assert runner.progress.data['failures'] == 2
+    assert runner.progress.data['in_flight'] is True
+    assert runner.progress.data['history'] == []
+    war.start_war.assert_not_called()
+    war.loop.assert_not_called()
+    assert [call.args[0] for call in module.auto.click_element.call_args_list] == ['标准博弈']
+
+
+def test_resumed_run_still_stops_on_third_failed_attempt(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module)
+    runner.scan_rewards = Mock(return_value=(partial, 0, 20))
+    war.result = False
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'):
+        assert runner.run() is False
+    assert runner.progress.data['failures'] == 3
+    assert runner.progress.data['paused'] is True
+    assert len(runner.progress.data['history']) == 1
+    war.start_war.assert_not_called()
+
+
+def test_unknown_resumed_result_keeps_in_flight_without_counting_failure(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module)
+    runner.scan_rewards = Mock(return_value=(partial, 0, 20))
+    war.result = None
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'), pytest.raises(RuntimeError, match='结果未确认'):
+        runner.run()
+    assert runner.progress.data['failures'] == 2
+    assert runner.progress.data['in_flight'] is True
+    assert runner.progress.data['history'] == []
+    assert runner.scan_rewards.call_count == 1
+    war.start_war.assert_not_called()
+
+
+def test_resume_entry_timeout_preserves_unknown_run(tmp_path):
+    module, stubs, war, runner = campaign(tmp_path)
+    partial = prepare_resume(runner, module)
+    runner.scan_rewards = Mock(return_value=(partial, 0, 20))
+    module.auto.find_element.return_value = False
+    with patch.dict(sys.modules, stubs), patch.object(module.time, 'sleep'), pytest.raises(RuntimeError, match='未确认进入原局'):
+        runner.run()
+    assert runner.progress.data['in_flight'] is True
+    assert runner.progress.data['failures'] == 2
+    war.loop.assert_not_called()
+    war.start_war.assert_not_called()
+
+
 def test_purple_one_is_verified_without_touching_rank_arrows(tmp_path):
     module, _, war, runner = campaign(tmp_path)
     runner.read_rank = Mock(return_value=('A5紫金', 1))
