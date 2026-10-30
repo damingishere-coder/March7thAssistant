@@ -618,6 +618,8 @@ class CurrencyWars:
                 self.check_festival_star_popup()
                 self.identify_current_stage()
                 if self.need_exit:
+                    if self.bond_campaign is not None:
+                        self.abort_run("羁绊对局阶段识别连续异常，保留现场，停止自动放弃或重开")
                     self.give_up_and_settle()
                     self.need_exit = False
                     return
@@ -2624,6 +2626,17 @@ class CurrencyWars:
             else:
                 auto.click_element_with_pos(result)
             return True
+
+        if auto.find_element("挑战成功", "text", crop=(.30, .33, .40, .25)):
+            texts = {re.sub(r"\s+", "", box[1][0]) for box in auto.ocr_result}
+            # 最终金色结算同时显示生命值；普通节点的成功文字不能当作整局胜利。
+            if any("小队生命值" in text for text in texts):
+                self.result = True
+                self.screenshot = auto.screenshot
+                log.info("检测到挑战成功结算，点击空白处继续")
+                auto.click_element((.48, .78, .04, .04), "crop", press_duration=.10)
+                time.sleep(1)
+                return True
 
     def _check_boss_tag(self):
         # 沉重脚步：敌人攻击我方队员后，使受到攻击的我方队员行动延后8%。

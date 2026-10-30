@@ -70,6 +70,36 @@ class TestCurrencyWarsSettlement(unittest.TestCase):
         self.assertTrue(self.war.check_click_continue())
         self.assertIsNone(self.war.result)
 
+    def test_golden_success_summary_advances_without_a_continue_button(self):
+        self.module.auto.find_element.side_effect = [None, ((800, 430), (1080, 560))]
+        self.module.auto.ocr_result = [(None, (text, .99)) for text in (
+            '挑战成功', '小队生命值 100')]
+        screenshot = self.module.auto.screenshot
+        self.assertTrue(self.war.check_click_continue())
+        self.assertIs(self.war.result, True)
+        self.assertIs(self.war.screenshot, screenshot)
+        self.module.auto.click_element.assert_called_once()
+        self.module.auto.click_element_with_pos.assert_not_called()
+
+    def test_success_text_without_final_summary_does_not_finish_run(self):
+        self.module.auto.find_element.side_effect = [None, ((800, 430), (1080, 560))]
+        self.module.auto.ocr_result = [(None, ('挑战成功', .99))]
+        self.war.check_click_continue()
+        self.assertIsNone(self.war.result)
+        self.module.auto.click_element.assert_not_called()
+
+    def test_bond_stage_stall_does_not_abandon_game(self):
+        self.war.bond_campaign = object()
+        self.module.auto.find_element.return_value = ((1, 1), (10, 10))
+        self.war.click_origin = Mock()
+        self.war.check_festival_star_popup = Mock()
+        self.war.identify_current_stage = Mock(side_effect=lambda: setattr(self.war, 'need_exit', True))
+        self.war.give_up_and_settle = Mock()
+        with patch.object(self.module.time, 'monotonic', side_effect=[0, 8]):
+            with self.assertRaisesRegex(RuntimeError, '停止自动放弃'):
+                self.war.check_main_screen()
+        self.war.give_up_and_settle.assert_not_called()
+
     def test_exhausted_health_settlement_captures_observed_result(self):
         # Observed 2-1 defeat: no “对局未完成” or “下一页” before returning home.
         self.module.auto.find_element.return_value = ((910, 879), (1011, 909))
