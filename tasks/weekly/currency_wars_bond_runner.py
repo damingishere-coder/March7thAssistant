@@ -464,11 +464,19 @@ class BondCampaign:
         log.info(f"已确认原局紫金1、进度{stage[1]}，接续{self.target.name}；保留阵容与连续失败次数")
         if not auto.click_element("继续进度", "text", crop=(.77, .87, .22, .10), press_duration=.10):
             raise RuntimeError("未能点击原局继续进度，保留中断记录")
+        map_dismissed = False
         for _ in range(20):
             if auto.find_element("./assets/images/screen/currency_wars/exit.png", "image", .9,
                                  crop=(3 / 1920, 37 / 1080, 104 / 1920, 57 / 1080)):
                 self.war.loop()
                 return self.finish_run()
+            if not map_dismissed:
+                _, result = self.capture()
+                texts = self.texts(result)
+                if "点击空白处继续" in texts and any("位面" in text for text in texts):
+                    log.info("接续原局时检测到位面地图，点击空白处继续")
+                    self.click(.50, .89)
+                    map_dismissed = True
             time.sleep(2)
         raise RuntimeError("接续后未确认进入原局，保留中断记录，不重复点击或重开")
 
