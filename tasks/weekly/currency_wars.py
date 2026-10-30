@@ -2496,6 +2496,15 @@ class CurrencyWars:
         time.sleep(0.5)
         name = auto.get_single_line_text(crop=char_name_crop)
 
+        # 新版详情面板整体下移40像素。先确认站位文字，再切换整组字段坐标，
+        # 避免把空位背景当作角色；旧版布局仍优先使用原坐标。
+        if not name and auto.find_element(("前台", "后台", "前后台"), "text",
+                                          crop=(1494 / 1920, 289 / 1080, 240 / 1920, 40 / 1080)):
+            char_name_crop = (1493 / 1920, 253 / 1080, 299 / 1920, 30 / 1080)
+            char_pos_crop = (1494 / 1920, 289 / 1080, 35 / 1920, 40 / 1080)
+            char_money_crop = (1831 / 1920, 228 / 1080, 35 / 1920, 42 / 1080)
+            name = auto.get_single_line_text(crop=char_name_crop)
+
         # 特殊处理：如果识别到的名字是 "M"，则可能是识别错误导致的乱码，暂时视为未识别到角色
         if name == "M":
             name = None
