@@ -2159,14 +2159,22 @@ class CurrencyWars:
         识别当前角色等级
         """
         level_crop = (235.0 / 1920, 876.0 / 1080, 125.0 / 1920, 60.0 / 1080)
-        result = auto.get_single_line_text(crop=level_crop)
-        if result:
-            digits = ''.join(filter(str.isdigit, result))
-            if digits.isdigit():
-                level = int(digits)
-                if 3 <= level <= 10:
-                    self.current_level = level
+        bond_mode = self.bond_campaign is not None
+        # 实机7级的斜体数字在原区域无法识别；紧裁等级行并避开下方经验。
+        crops = [level_crop, (250 / 1920, 880 / 1080, 85 / 1920, 54 / 1080)] if bond_mode else [level_crop]
+        attempts = 3 if bond_mode else 1
+        for attempt in range(attempts):
+            for crop in crops:
+                result = auto.get_single_line_text(crop=crop, max_retries=1 if bond_mode else 3)
+                if not result:
+                    continue
+                digits = ''.join(filter(str.isdigit, result))
+                if digits.isdigit() and 3 <= int(digits) <= 10:
+                    self.current_level = int(digits)
                     return True
+            if attempt < attempts - 1:
+                # 升级动画结束后重新截图；不沿用旧等级，也不重复按购买经验。
+                time.sleep(.5)
         return False
 
     def buy_experience(self):
