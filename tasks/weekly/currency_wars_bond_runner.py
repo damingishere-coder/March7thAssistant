@@ -9,6 +9,7 @@ from module.logger import log
 from module.screen import screen
 from tasks.weekly.currency_wars_bonds import (
     BondProgress, BondTarget, STRATEGY, campaign_lock, compact, parse_progress, parse_reward_page,
+    choose_bond_purchase,
 )
 
 
@@ -22,6 +23,7 @@ class BondCampaign:
         self.progress = BondProgress()
         self.target = None
         self.members = set()
+        self.member_costs = {}
         self.all_rewards = []
 
     @staticmethod
@@ -239,6 +241,7 @@ class BondCampaign:
         if marker is None:
             raise RuntimeError("未找到羁绊内队员头像栏，暂停角色识别")
         self.members = set()
+        self.member_costs = {}
         def read_row(marker, image):
             start_x = min(point[0] for point in marker) / image.width + .023
             center_y = max(point[1] for point in marker) / image.height + .060
@@ -260,6 +263,9 @@ class BondCampaign:
                     name = compact(name)
                     if re.fullmatch(r"[\w\u4e00-\u9fff·&\-]{1,24}", name) and name not in {"前台", "后台", "前后台", "输出", "辅助", "治疗", "护盾", self.target.name}:
                         self.members.add(name)
+                        cost = next((int(text) for text in popup[:2] if text in {"1", "2", "3", "4", "5"}), None)
+                        if cost is not None:
+                            self.member_costs[name] = cost
         read_row(marker, image)
         # 部分羁绊还包含可通过专家邀请获得的角色，人数不足时继续读取顾问栏。
         if len(self.members) < self.target.count:
@@ -277,6 +283,7 @@ class BondCampaign:
             raise RuntimeError(f"{self.target.name}需{self.target.count}名不同角色，图鉴仅确认{len(self.members)}名；停止并保留现场")
         log.info(f"当前目标：{self.target.name}（{self.target.count}人），已从图鉴确认角色：{', '.join(sorted(self.members))}")
         self.progress.data["members"] = sorted(self.members)
+        self.progress.data["member_costs"] = self.member_costs
         self.progress.save()
         self.return_home()
 
@@ -319,60 +326,159 @@ class BondCampaign:
         raise RuntimeError("未能确认紫金1，停止开始对局")
 
     def prepare_board(self):
-        """目标角色优先，留出人口升级资金；补给和部署共用同一成员集合。"""
+        """免费商店补缺 -> 投入人口 -> 达到人口后刷缺失角色。"""
         war = self.war
-        if not war.current_level:
-            war.get_level()
+        if not war.get_level():
+            raise RuntimeError("未确认小队等级，停止花费羁绊预算")
         self.sell_surplus(only_when_full=True)
+        self.buy_bond_characters(reroll=False)
+        before = war.current_level
+        if not self.late_search():
+            self.invest_experience()
+        if war.current_level >= self.population_target or self.late_search() or war.current_level != before:
+            self.buy_bond_characters(reroll=war.current_level >= self.population_target or self.late_search())
+        owned = {character.name for character in self.characters() if character.name}
+        log.info(f"羁绊收集：{self.target.name}，已拥有{len(self.members & owned)}/{self.target.count}名；"
+                 f"Lv{war.current_level}；缺少：{', '.join(sorted(self.members - owned)) or '无'}")
+
+    def characters(self):
+        return [character for zone in ("forward", "backward", "prepare")
+                for character in getattr(self.war, f"{zone}_characters", []) if character.name]
+
+    def costs(self):
+        # 图鉴偶尔漏读费用时按5币预留，不能把未知费用当成1币。
+        known = dict(getattr(self.war, "character_purchase_costs", {}))
+        known.update(self.member_costs)
+        for character in self.characters():
+            if 1 <= character.money <= 5:
+                known[character.name] = character.money
+        return {**known, **{name: known.get(name, 5) for name in self.members}}
+
+    def late_search(self):
+        # 尾段已满足上阵人数时保留搜最后一名的机会，避免把最后的钱全投向下一级。
+        match = re.fullmatch(r"3-([4-9])", self.war.current_stage)
+        return bool(match and self.war.current_level >= max(8, self.target.count))
+
+    def invest_experience(self):
+        war = self.war
+        for _ in range(10):
+            if not war.get_level():
+                raise RuntimeError("升级时未确认小队等级，停止花费")
+            if war.current_level >= self.population_target:
+                return
+            money = self.read_money()
+            reserve = max((self.costs()[name] for name in self.members), default=5)
+            affordable = max(0, (money - reserve) // 4)
+            if not affordable:
+                return
+            value = compact(auto.get_single_line_text((235 / 1920, 930 / 1080, 124 / 1920, 38 / 1080)) or "")
+            match = re.fullmatch(r"(\d+)/(\d+)", value)
+            if match is None or not 0 <= int(match[1]) < int(match[2]):
+                raise RuntimeError("未确认升级经验，保留金币并停止任务")
+            times = min(affordable, (int(match[2]) - int(match[1]) + 3) // 4)
+            log.info(f"羁绊人口预算：Lv{war.current_level}，金币{money}，预留{reserve}，投入{times * 4}币购买经验")
+            for _ in range(times):
+                auto.press_key("f")
+                time.sleep(.3)
+            time.sleep(.8)
+            if self.read_money() >= money:
+                raise RuntimeError("购买经验后金币未减少，停止重复输入")
+        raise RuntimeError("人口预算连续升级未结束，停止重复输入")
+
+    @staticmethod
+    def read_money():
+        value = compact(auto.get_single_line_text((1559 / 1920, 880 / 1080, 127 / 1920, 82 / 1080),
+                                                 blacklist=['V', '?']) or "")
+        if not value.isdigit():
+            raise RuntimeError("未确认金币余额，停止花费并保留现场")
+        money = int(value)
+        log.info(f"羁绊预算余额：{money}")
+        return money
+
+    def buy_bond_characters(self, reroll=False):
+        war = self.war
         shop_button = (1591 / 1920, 958 / 1080, 66 / 1920, 46 / 1080)
         shop_crop = (344 / 1920, 19 / 1080, 1370 / 1920, 526 / 1080)
-        auto.click_element(shop_button, "crop")
-        time.sleep(.5)
-        bought = False
+        fold_crop = (1593 / 1920, 959 / 1080, 100 / 1920, 43 / 1080)
+
+        def open_shop():
+            auto.click_element(shop_button, "crop", press_duration=.10)
+            time.sleep(.5)
+            if auto.find_element("收起", "text", crop=fold_crop, include=True):
+                return True
+            if auto.find_element("该状态下不可使用", "text", include=True):
+                log.info("当前节点商店不可用，保留预算")
+                return False
+            raise RuntimeError("未确认商店已打开，保留金币并停止任务")
+
+        def close_shop():
+            if not auto.click_element("收起", "text", crop=fold_crop, include=True, press_duration=.10):
+                raise RuntimeError("未确认商店关闭按钮，停止任务")
+            time.sleep(.4)
+
+        if not open_shop():
+            return
+        opened = True
         unavailable = set()
-        owned = {char.name for char in war.forward_characters + war.backward_characters + war.prepare_characters if char.name}
-        maxed = {char.name for char in war.forward_characters + war.backward_characters + war.prepare_characters if char.level >= 3}
+        purchases = 0
         try:
-            for _ in range(16):
-                money = war.check_money()
+            for _ in range(20):
+                money = self.read_money()
                 if money < 1:
                     break
+                characters = self.characters()
+                owned = {character.name for character in characters}
+                missing = self.members - owned
                 texts = war._get_ocr_texts_in_crop(shop_crop)
-                visible = {compact(text) for text in texts}
-                preferred = sorted((self.members & visible) - unavailable - maxed, key=lambda name: (name in owned, name))
-                if not preferred and len(owned) < min(self.population_target, war.current_level):
-                    # 没有目标角色时只补空位，优先生存、治疗和辅助；不能挤掉羁绊角色。
-                    preferred = [name for name in ("藿藿", "符玄", "风堇", "缇宝", "星期日", "银狼")
-                                 if name in visible and name not in owned and name not in unavailable
-                                 and war.can_afford_character(money, name)]
-                if preferred:
-                    # 购买动作后必须重新读商店，不能复用上次 OCR 坐标。
-                    war._get_ocr_texts_in_crop(shop_crop)
-                    if auto.click_element(preferred[0], "text", take_screenshot=False, need_ocr=False):
+                visible = {compact(text) for text in texts} - unavailable
+                name = choose_bond_purchase(visible, characters, self.members, money, self.costs(),
+                                           war.current_level, allow_upgrades=reroll)
+                if name and purchases < 6:
+                    if auto.click_element(name, "text", take_screenshot=False, need_ocr=False, press_duration=.10):
                         time.sleep(.8)
-                        # 点击不代表购买成功：必须看到余额确实减少。
-                        balance = auto.get_single_line_text((1559 / 1920, 880 / 1080, 127 / 1920, 82 / 1080))
-                        if balance and compact(balance).isdigit() and int(compact(balance)) < money:
-                            owned.add(preferred[0])
-                            bought = True
+                        balance = self.read_money()
+                        if balance < money:
+                            log.info(f"羁绊购买：{name}，{'补缺' if name in missing else '合成/补位'}，实际花费{money - balance}")
+                            close_shop()
+                            opened = False
+                            war.check_character_status()
+                            purchases += 1
+                            if not open_shop():
+                                return
+                            opened = True
                         else:
-                            unavailable.add(preferred[0])
+                            unavailable.add(name)
                         continue
-                reserve = 8 if war.current_level < self.population_target else 2
-                if money <= reserve + 2:
+                    unavailable.add(name)
+                    continue
+                # 人口未达标时不刷商店；达到后只为缺失成员刷新并留足最高5费购卡钱。
+                reserve = max((self.costs()[member] for member in missing), default=5)
+                if not reroll or not missing or purchases >= 6 or money < reserve + 2:
                     break
                 auto.press_key("d")
                 unavailable.clear()
                 time.sleep(.6)
+                if self.read_money() >= money:
+                    log.warning("商店刷新后余额未减少，停止本轮刷新")
+                    break
         finally:
-            auto.click_element(shop_button, "crop")
-            time.sleep(.5)
-        if bought:
-            war.check_character_status()
+            if opened:
+                close_shop()
 
     @property
     def population_target(self):
-        return min(10, max(8, self.target.count + 2))
+        rare_member = any(self.costs().get(name, 5) >= 5 for name in self.members)
+        return min(10, max(8, self.target.count + (2 if rare_member else 1)))
+
+    def choose_invitation(self, crop):
+        visible = {compact(text) for text in self.war._get_ocr_texts_in_crop(crop)}
+        owned = {character.name for character in self.characters()}
+        candidates = visible & self.members
+        if not candidates:
+            return False
+        name = min(candidates, key=lambda member: (member in owned, -self.costs()[member], member))
+        log.info(f"羁绊邀请：优先选择{name}（{'缺失角色' if name not in owned else '已有角色'}）")
+        return bool(auto.click_element(name, "text", crop=crop, press_duration=.10))
 
     def choose_option(self, crops):
         """用于投资环境、补给：目标羁绊及其成员优先。"""
@@ -380,12 +486,14 @@ class BondCampaign:
 
     def choose_text_option(self, texts_by_option):
         options = []
+        owned = {character.name for character in self.characters()}
         for index, texts in enumerate(texts_by_option):
             normalized = {compact(text) for text in texts}
             if any(bad in text for text in normalized for bad in
                    ("现金为王", "降本增效", "大裁员", "人力重组", "全员晋升", "节省工位")):
                 continue
-            score = 10 * sum(name in normalized for name in self.members)
+            score = sum((100 if name not in owned else 10)
+                        for name in self.members if any(name in text for text in normalized))
             score += 20 * sum(self.target.name in text for text in normalized)
             if score:
                 options.append((score, index))
@@ -457,6 +565,7 @@ class BondCampaign:
             raise RuntimeError("未确认可接续的标准博弈紫金1旧局，保留中断记录，不放弃或重开")
         self.target = BondTarget(rows[0].category, rows[0].name, max(row.count for row in rows))
         self.members = set(saved_members)
+        self.member_costs = dict(self.progress.data.get("member_costs", {}))
         self.all_rewards = rewards
         self.war.bond_campaign = self
         cfg.set_values({"currencywars_type": "normal", "currencywars_rank_difficulty": "purple1",

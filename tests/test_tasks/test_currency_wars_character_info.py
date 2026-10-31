@@ -33,3 +33,32 @@ def test_empty_slot_without_role_marker_is_not_treated_as_shifted_character():
     assert character.name is None
     assert not war.character_info_cache
     assert module.auto.get_single_line_text.call_count == 1
+
+
+def test_bond_star_levels_are_fresh_per_copy_instead_of_shared_name_cache():
+    module = load_currency_wars()
+    war = module.CurrencyWars()
+    war.bond_campaign = object()
+    war.character_info_cache['藿藿'] = module.CurrencyWarsCharacter('藿藿', 'all', level=1)
+    module.auto.get_single_line_text.return_value = '藿藿'
+    war.read_character_stars = Mock(side_effect=[3, 1])
+    war.click_origin = Mock()
+    with patch.object(module.time, 'sleep'):
+        strong = war.check_character_info(war.forward_pos[0])
+        spare = war.check_character_info(war.prepare_pos[0])
+    assert (strong.level, spare.level) == (3, 1)
+    assert strong is not spare
+
+
+def test_shifted_panel_uses_shifted_star_band():
+    module = load_currency_wars()
+    war = module.CurrencyWars()
+    war.bond_campaign = object()
+    war.read_character_stars = Mock(return_value=3)
+    module.auto.get_single_line_text.side_effect = [None, '藿藿', '1']
+    module.auto.find_element.side_effect = [True, False, True]
+    war.click_origin = Mock()
+    with patch.object(module.time, 'sleep'):
+        result = war.check_character_info(war.forward_pos[0])
+    assert result.level == 3
+    war.read_character_stars.assert_called_once_with((1566 / 1920, 201 / 1080, 126 / 1920, 25 / 1080))
