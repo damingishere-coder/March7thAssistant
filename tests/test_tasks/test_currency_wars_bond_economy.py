@@ -86,11 +86,22 @@ def test_experience_input_without_balance_change_stops_instead_of_retrying(tmp_p
 def test_unconfirmed_level_after_purchase_stops_before_any_additional_experience(tmp_path):
     module, _, war, runner = prepare_economy(tmp_path)
     war.get_level.side_effect = [True, False]
-    runner.read_money = Mock(side_effect=[15, 11])
+    runner.read_money = Mock(side_effect=[15, 11, 11])
     module.auto.get_single_line_text.return_value = '26/28'
     with patch.object(module.time, 'sleep'), pytest.raises(RuntimeError, match='未确认小队等级'):
         runner.invest_experience()
     assert module.auto.press_key.call_count == 1
+
+
+def test_spent_budget_returns_without_requiring_another_level_read(tmp_path):
+    module, _, war, runner = prepare_economy(tmp_path)
+    war.get_level.side_effect = [True, False]
+    runner.read_money = Mock(side_effect=[21, 5, 5])
+    module.auto.get_single_line_text.return_value = '8/52'
+    with patch.object(module.time, 'sleep'):
+        runner.invest_experience()
+    assert war.get_level.call_count == 1
+    assert module.auto.press_key.call_count == 4
 
 
 def test_late_game_search_is_allowed_at_sufficient_population(tmp_path):
