@@ -47,6 +47,19 @@ def compact(text):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
+def prepare_level_image(image, digits_only=False):
+    """保留黑色等级字形，滤掉经验高光；留白让检测器能找到短文本。"""
+    from PIL import ImageOps
+    if digits_only:
+        # 大字数字单独放大，避免高光使“Lv.”与进度线粘连后检测不到文本。
+        width, height = image.size
+        image = image.crop((width * 59 / 125, height * 6 / 54, width * 99 / 125, height))
+    binary = image.convert("L").point(lambda value: 255 if value > 40 else 0)
+    if digits_only:
+        binary = binary.resize((80, 96))
+    return ImageOps.expand(binary.convert("RGB"), border=24 if digits_only else 12, fill="white")
+
+
 @dataclass(frozen=True)
 class BondReward:
     category: str

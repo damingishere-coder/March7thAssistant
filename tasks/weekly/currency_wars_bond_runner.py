@@ -362,14 +362,14 @@ class BondCampaign:
     def invest_experience(self):
         war = self.war
         for _ in range(10):
-            if not war.get_level():
-                raise RuntimeError("升级时未确认小队等级，停止花费")
-            if war.current_level >= self.population_target:
-                return
             money = self.read_money()
             reserve = max((self.costs()[name] for name in self.members), default=5)
             affordable = max(0, (money - reserve) // 4)
             if not affordable:
+                return
+            if not war.get_level():
+                raise RuntimeError("升级时未确认小队等级，停止花费")
+            if war.current_level >= self.population_target:
                 return
             value = compact(auto.get_single_line_text((235 / 1920, 930 / 1080, 124 / 1920, 38 / 1080)) or "")
             match = re.fullmatch(r"(\d+)/(\d+)", value)

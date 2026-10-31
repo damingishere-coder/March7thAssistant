@@ -2164,6 +2164,11 @@ class CurrencyWars:
         crops = [level_crop, (250 / 1920, 880 / 1080, 85 / 1920, 54 / 1080)] if bond_mode else [level_crop]
         attempts = 3 if bond_mode else 1
         for attempt in range(attempts):
+            if bond_mode:
+                level = self.read_level_without_highlight()
+                if level is not None:
+                    self.current_level = level
+                    return True
             for crop in crops:
                 result = auto.get_single_line_text(crop=crop, max_retries=1 if bond_mode else 3)
                 if not result:
@@ -2176,6 +2181,20 @@ class CurrencyWars:
                 # 升级动画结束后重新截图；不沿用旧等级，也不重复按购买经验。
                 time.sleep(.5)
         return False
+
+    def read_level_without_highlight(self):
+        from module.ocr import ocr
+        from tasks.weekly.currency_wars_bonds import compact, prepare_level_image
+        if not auto.take_screenshot((235 / 1920, 876 / 1080, 125 / 1920, 54 / 1080)) or auto.screenshot is None:
+            return None
+        for digits_only in (False, True):
+            result = ocr.recognize_single_line(prepare_level_image(auto.screenshot, digits_only))
+            if result and result[1] >= (.95 if digits_only else .85):
+                pattern = r"(10|[3-9])" if digits_only else r"(?:Lv\.?)?(10|[3-9])"
+                match = re.fullmatch(pattern, compact(result[0]), re.IGNORECASE)
+                if match:
+                    return int(match[1])
+        return None
 
     def buy_experience(self):
         """
