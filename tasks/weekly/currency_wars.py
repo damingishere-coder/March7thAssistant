@@ -2173,7 +2173,8 @@ class CurrencyWars:
         """
         购买经验
         """
-        if self.bond_campaign is not None and self.current_level >= self.bond_campaign.population_target:
+        if self.bond_campaign is not None:
+            # 羁绊策略在刷商店前按预算升级，避免原流程等钱足够整级才投入。
             return
         if cfg.currencywars_strategy == "aglaea" and self.current_level == 9:
             log.info("当前等级9，策略为阿格莱雅，跳过购买经验")
@@ -2347,7 +2348,7 @@ class CurrencyWars:
             return False
         log.info("检测到聘用书选项，尝试点击")
         if self.bond_campaign is not None:
-            if not auto.click_element(tuple(sorted(self.bond_campaign.members)), "text", crop=(501 / 1920, 362 / 1080, 1047 / 1920, 42 / 1080)):
+            if not self.bond_campaign.choose_invitation((501 / 1920, 362 / 1080, 1047 / 1920, 42 / 1080)):
                 auto.click_element((486 / 1920, 159 / 1080, 240 / 1920, 269 / 1080), "crop")
         elif cfg.currencywars_strategy == "aglaea":
             remembrance_trailblazer_name = self.get_remembrance_trailblazer_name()
@@ -2388,7 +2389,7 @@ class CurrencyWars:
             return False
         log.info("检测到专家邀请函选项，尝试点击")
         if self.bond_campaign is not None:
-            if not auto.click_element(tuple(sorted(self.bond_campaign.members)), "text", crop=(366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
+            if not self.bond_campaign.choose_invitation((366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
                 auto.click_element((769 / 1920, 134 / 1080, 245 / 1920, 276 / 1080), "crop")
         elif cfg.currencywars_strategy == "aglaea" and auto.click_element("银狼", "text", crop=(366 / 1920, 363 / 1080, 1318 / 1920, 40 / 1080)):
             pass
@@ -2459,6 +2460,10 @@ class CurrencyWars:
         # self.forward_characters = []
         # self.backward_characters = []
         self.prepare_characters = []
+        if self.bond_campaign is not None:
+            # 合成会改变已上场角色的星级；不能一直复用首次入场时的对象。
+            self.forward_characters = []
+            self.backward_characters = []
 
         # forward 和 backward 位置检测到空位后，后续默认都为空
         if self.forward_characters == []:
@@ -2502,6 +2507,7 @@ class CurrencyWars:
                                           crop=(1494 / 1920, 289 / 1080, 240 / 1920, 40 / 1080)):
             char_name_crop = (1493 / 1920, 253 / 1080, 299 / 1920, 30 / 1080)
             char_pos_crop = (1494 / 1920, 289 / 1080, 35 / 1920, 40 / 1080)
+            char_level_crop = (1566 / 1920, 201 / 1080, 126 / 1920, 25 / 1080)
             char_money_crop = (1831 / 1920, 228 / 1080, 35 / 1920, 42 / 1080)
             name = auto.get_single_line_text(crop=char_name_crop)
 
@@ -2510,13 +2516,17 @@ class CurrencyWars:
             name = None
 
         if name:
+            level = self.read_character_stars(char_level_crop) if self.bond_campaign is not None else 1
             # 检查缓存中是否已有该角色信息
             if name in self.character_info_cache:
-                log.info(f"识别到已知角色：{name}")
+                log.info(f"识别到已知角色：{name}" + (f"，{level}星" if self.bond_campaign is not None else ""))
                 if cfg.currencywars_strategy == "aglaea":
                     self.mark_tracked_character(name)
                 self.click_origin()
-                return self.character_info_cache[name]
+                cached = self.character_info_cache[name]
+                if self.bond_campaign is not None:
+                    return CurrencyWarsCharacter(name, cached.pos, level=level, money=cached.money)
+                return cached
 
             # 首次识别该角色,获取完整信息并缓存
             if auto.find_element("./assets/images/screen/currency_wars/pos_forward.png", "image", 0.9, crop=char_pos_crop):
@@ -2586,7 +2596,7 @@ class CurrencyWars:
                     self.mark_tracked_character(name)
 
             # 创建角色对象并缓存
-            character = CurrencyWarsCharacter(name, cpos, money=int(money))
+            character = CurrencyWarsCharacter(name, cpos, level=level, money=int(money))
             self.character_info_cache[name] = character
 
             self.click_origin()
@@ -2595,6 +2605,12 @@ class CurrencyWars:
             # 部分用户开拓者名字非中英语，导致 OCR 失败，但是角色信息界面仍然打开，需要点击空白处关闭界面否则特定情况下会影响后续操作（比如点进开拓者角色界面）
             self.click_origin()
         return CurrencyWarsCharacter(None, None)
+
+    def read_character_stars(self, crop):
+        from tasks.weekly.currency_wars_bonds import character_stars
+        if not auto.take_screenshot(crop) or auto.screenshot is None:
+            return 0
+        return character_stars(auto.screenshot)
 
     def click_origin(self):
         """

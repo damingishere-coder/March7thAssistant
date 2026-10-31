@@ -72,6 +72,59 @@ class BondTarget:
         return f"{self.category}:{self.name}"
 
 
+def character_stars(image):
+    """读取详情面板的金色星级栏；无法确认时返回0，不能猜成一星。"""
+    import numpy as np
+    pixels = np.asarray(image.convert("RGB")).astype(float)
+    mask = ((pixels[:, :, 0] > 180) & (pixels[:, :, 1] > 130)
+            & (pixels[:, :, 0] > pixels[:, :, 2] * 1.15)
+            & (pixels[:, :, 1] > pixels[:, :, 2] * 1.10))
+    active_rows = np.flatnonzero(mask.any(axis=1))
+    if len(active_rows) < 8:
+        return 0
+    height = active_rows[-1] - active_rows[0] + 1
+    peaks = mask.sum(axis=0) >= max(4, height * .48)
+    edges = np.diff(np.r_[False, peaks, False].astype(int))
+    groups = [(start, end) for start, end in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))
+              if 2 <= end - start <= height * .8]
+    if not 1 <= len(groups) <= 3:
+        return 0
+    centers = [(start + end) / 2 for start, end in groups]
+    if any(not height * .65 <= right - left <= height * 1.5
+           for left, right in zip(centers, centers[1:])):
+        return 0
+    if abs(sum(centers) / len(centers) - image.width / 2) > max(height, image.width * .15):
+        return 0
+    return len(groups)
+
+
+def choose_bond_purchase(visible, characters, members, money, costs, level,
+                         allow_upgrades=False):
+    """缺失角色优先；未知星级及满星均不重复购买，升人口前只补能立即二星的对子。"""
+    owned = {character.name for character in characters if character.name}
+    missing = members - owned
+    affordable = {name for name in visible if name in costs and 1 <= costs[name] <= money}
+    new_members = affordable & missing
+    if new_members:
+        return min(new_members, key=lambda name: (-costs[name], name))
+    for name in sorted(affordable & members & owned):
+        copies = [character for character in characters if character.name == name]
+        stars = [character.level for character in copies]
+        if not stars or any(star not in (1, 2) for star in stars):
+            continue
+        count = sum(3 ** (star - 1) for star in stars)
+        # 凑齐不同角色前不追三星；已有二星时把钱留给缺失角色和人口。
+        if missing and max(stars) >= 2:
+            continue
+        if (allow_upgrades or count == 2) and money - costs[name] >= 5:
+            return name
+    if len(owned) < min(level, 4):
+        for name in ("藿藿", "风堇", "缇宝", "符玄", "银狼"):
+            if name in affordable - owned and costs[name] <= 2:
+                return name
+    return None
+
+
 def next_target(rewards, preferred=None):
     """同一羁绊全部档位领取后才轮换，流派优先，保持画面中的排列顺序。"""
     groups = {}
